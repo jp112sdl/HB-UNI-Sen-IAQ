@@ -5,8 +5,8 @@
 
 #include <Wire.h>
 #include <Sensors.h>
-#include <Adafruit_Sensor.h>
-#include "Adafruit_BME680.h"
+#include <ClosedCube_BME680.h>
+
 
 /*
  * Gas is returned as a resistance value in ohms.
@@ -18,11 +18,13 @@
 #define HUM_REFERENCE   40.0
 #define HUM_WEIGHTING   0.25     // so hum effect is 25% of the total air quality score
 #define GAS_WEIGHTING   0.75     // so gas effect is 75% of the total air quality score
-#define GAS_LOWER_LIMIT 5000.0   // Bad air quality limit
-#define GAS_UPPER_LIMIT 50000.0  // Good air quality limit
+#define GAS_LOWER_LIMIT 50000.0   // Bad air quality limit
+#define GAS_UPPER_LIMIT 500000.0  // Good air quality limit
+#define AVG_COUNT       1
 
 namespace as {
 
+template <uint8_t ADDRESS=0x77>
 class Sens_Bme680 : public Sensor {
 private:
   int16_t   _temperature;
@@ -30,52 +32,33 @@ private:
   uint8_t   _humidity;
   uint16_t  _iaqPercent;
   uint8_t   _iaqState;
-  uint8_t   _getgasreference_count;
-  float     _gas_reference;
-  float     _hum_score;
-  float     _gas_score;
 
-  // Default : forced mode, standby time = 1000 ms, Oversampling = pressure ×1, temperature ×1, humidity ×1, filter off
-  Adafruit_BME680 _bme680;
+  ClosedCube_BME680 _bme680;
 public:
 
-
-
-  Sens_Bme680 (): _temperature(0),  _pressureNN(0), _humidity(0), _iaqPercent(0), _iaqState(0), _getgasreference_count(4), _gas_reference(250000.0), _hum_score(0.0), _gas_score(0.0) {}
+  Sens_Bme680 (): _temperature(0),  _pressureNN(0), _humidity(0), _iaqPercent(0), _iaqState(0) {}
     ~Sens_Bme680 () {}
-
-
-  void GetGasReference(uint8_t readings){
-    // Now run the sensor for a burn-in period, then use combination of relative humidity and gas resistance to estimate indoor air quality as a percentage.
-    //DPRINTLN(F("Getting a new gas reference value"));
-    _getgasreference_count = 0;
-    for (int i = 0; i < readings; i++){ // read gas for 10 x 0.150mS = 1.5secs
-      uint32_t g = _bme680.readGas();
-      //DDEC(g);DPRINT(" ");
-      _gas_reference += g;
-    }
-    DPRINTLN("");
-    _gas_reference = _gas_reference / readings;
-  }
-
 
   void init () {
 
     Wire.begin();
     DPRINT(F("BME680 "));
-    if (!_bme680.begin()) {
+    _bme680.init(ADDRESS); // I2C address: 0x76 or 0x77
+    if (_bme680.reset() != 0) {
       DPRINTLN(F("ERR"));
       while (1);
-    } else DPRINTLN(F("OK"));
+    } else DPRINT(F("OK"));
     _present = true;
 
-    _bme680.setTemperatureOversampling(BME680_OS_2X);
-    _bme680.setHumidityOversampling(BME680_OS_2X);
-    _bme680.setPressureOversampling(BME680_OS_2X);
-    _bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
-    _bme680.setGasHeater(320, 150); // 320°C for 150 ms
-    //an initial reading is needed
-    GetGasReference(1);
+
+    DPRINT(", Chip ID=0x");
+    DHEXLN(_bme680.getChipID());
+
+      // oversampling: humidity = x1, temperature = x2, pressure = x16
+    _bme680.setOversampling(BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X4);
+    _bme680.setIIRFilter(BME680_FILTER_3);
+    _bme680.setGasOn(320, 150); // 300 degree Celsius and 100 milliseconds
+    _bme680.setForcedMode();
   }
 
   float EquivalentSeaLevelPressure(float altitude, float temp, float pres) {
@@ -98,31 +81,46 @@ public:
     return val;
   }
 
-
   void measure (uint16_t height) {
     if (_present == true) {
       float temp(NAN), hum(NAN), pres(NAN);
       uint32_t gas = 0;
 
-      if (!_bme680.performReading()) {
-        DPRINT(F("BME680 read err"));
-        return;
+      ClosedCube_BME680_Status status = _bme680.readStatus();
+      while (! (status.newDataFlag == 1)) {
+        _bme680.setForcedMode();
+        DPRINT(".");
+        _delay_ms(200);
+        status = _bme680.readStatus();
       }
-      temp = _bme680.temperature;
-      hum  = _bme680.humidity;
-      pres = _bme680.pressure / 100.0;
-      gas  = _bme680.gas_resistance;
 
+      temp = _bme680.readTemperature();
+      pres = _bme680.readPressure();
+      hum =  _bme680.readHumidity();
+
+      DPRINT("gas: ");
+      gas = 0;
+      for (uint8_t c = 0; c < AVG_COUNT; c++) {
+        while (! (status.newDataFlag == 1)) {
+          _bme680.setForcedMode();
+          DPRINT(".");
+          _delay_ms(200);
+          status = _bme680.readStatus();
+        }
+        gas  += _bme680.readGasResistance();
+        status = _bme680.readStatus();
+      }
+      gas /= AVG_COUNT;
+      DDECLN(gas);
       _temperature = (int16_t)(temp * 10);
       _pressureNN  = (uint16_t)(EquivalentSeaLevelPressure(float(height), temp, pres) * 10);
       _humidity    = (uint8_t)hum;
 
-      //DPRINT(F("T   = "));DDECLN(_temperature);
-      //DPRINT(F("P   = "));DDECLN(_pressure);
-      //DPRINT(F("PNN = "));DDECLN(_pressureNN);
+      DPRINT(F("T   = "));DDECLN(_temperature);
+      DPRINT(F("P   = "));DDECLN(pres);
+      DPRINT(F("PNN = "));DDECLN(_pressureNN);
       DPRINT(F("Hum = "));DDECLN(_humidity);
-      DPRINT(F("Gas = "));DDECLN(gas);
-
+      DPRINT(F("Gas = "));DDECLN(gas / 1000);
 
       /*
        This software, the ideas and concepts is Copyright (c) David Bird 2018. All rights to this software are reserved.
@@ -143,6 +141,8 @@ public:
        See more at http://www.dsbird.org.uk
       */
         //Calculate humidity contribution to IAQ index
+      float _hum_score = 0.0;
+      float _gas_score = 0.0;
         if (hum >= 38 && hum <= 42)
           _hum_score = 0.25*100; // Humidity +/-5% around optimum
         else
@@ -155,13 +155,11 @@ public:
           }
         }
 
-        //nach 5x measure() eine neue Gas-Referenz aus 10 Gas-Messungen (Mittelwert holen)
-        if (_getgasreference_count++ == 5) GetGasReference(10);
-        if (_gas_reference > GAS_UPPER_LIMIT) _gas_reference = GAS_UPPER_LIMIT;
-        if (_gas_reference < GAS_LOWER_LIMIT) _gas_reference = GAS_LOWER_LIMIT;
-        DPRINT(F("gRef= "));DDECLN(_gas_reference);
+        if (gas > GAS_UPPER_LIMIT) gas = GAS_UPPER_LIMIT;
+        if (gas < GAS_LOWER_LIMIT) gas = GAS_LOWER_LIMIT;
+        //DPRINT(F("gRef= "));DDECLN(_gas_reference);
 
-        _gas_score = (0.75/(GAS_UPPER_LIMIT-GAS_LOWER_LIMIT)*_gas_reference -(GAS_LOWER_LIMIT*(0.75/(GAS_UPPER_LIMIT-GAS_LOWER_LIMIT))))*100;
+        _gas_score = (0.75/(GAS_UPPER_LIMIT-GAS_LOWER_LIMIT)*gas -(GAS_LOWER_LIMIT*(0.75/(GAS_UPPER_LIMIT-GAS_LOWER_LIMIT))))*100;
 
         //Combine results for the final IAQ index value (0-100% where 100% is good quality air)
         float air_quality_score = _hum_score + _gas_score;
@@ -171,6 +169,7 @@ public:
         //DPRINT(F("AQ% = "));DDECLN(_iaqPercent);
         //DPRINT(F("AQS = "));DDECLN(_iaqState);
         DPRINT(F("AQ  = "));DDEC((uint8_t)air_quality_score);DPRINT(F("% (H: "));DDEC((uint8_t)(_hum_score));DPRINT(F("% + G: "));DDEC((uint8_t)(_gas_score));DPRINTLN(F("%)"));
+        _bme680.setForcedMode();
     }
   }
   
