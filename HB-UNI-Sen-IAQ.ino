@@ -90,26 +90,25 @@ class SensorList0 : public RegList0<Reg0> {
 
 class WeatherEventMsg : public Message {
   public:
-    void init(uint8_t msgcnt, int16_t temp, uint16_t airPressure, uint8_t humidity, uint8_t iaq_percent, uint8_t iaq_state, bool batlow) {
+    void init(uint8_t msgcnt, int16_t temp, uint16_t airPressure, uint8_t humidity, uint8_t iaq_percent, uint8_t iaq_state, bool batlow, uint8_t volt) {
       uint8_t t1 = (temp >> 8) & 0x7f;
       uint8_t t2 = temp & 0xff;
       if ( batlow == true ) {
         t1 |= 0x80; // set bat low bit
       }
-      Message::init(0x10, msgcnt, 0x70,  (msgcnt % 20 == 1) ? BIDI : BCAST, t1, t2);
+      Message::init(0x11, msgcnt, 0x70,  (msgcnt % 20 == 1) ? BIDI : BCAST, t1, t2);
       pload[0] = (airPressure >> 8) & 0xff;
       pload[1] = airPressure & 0xff;
-      pload[2] = humidity;
-      pload[3] = iaq_percent;
-      pload[4] = iaq_state;
+      pload[2] = humidity & 0xff;
+      pload[3] = iaq_percent & 0xff;
+      pload[4] = iaq_state & 0xff;
+      pload[5] = volt & 0xff;
     }
 };
 
-
 class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CHANNEL, SensorList0>, public Alarm {
-
     WeatherEventMsg msg;
-    Sens_Bme680     bme680;
+    Sens_Bme680<>   bme680;
     uint16_t        millis;
 
   public:
@@ -122,7 +121,7 @@ class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CH
       tick = delay();
       clock.add(*this);
       bme680.measure(this->device().getList0().height());
-      msg.init( msgcnt,bme680.temperature(),bme680.pressureNN(),bme680.humidity(),bme680.iaq_percent(), bme680.iaq_state(), device().battery().low());
+      msg.init( msgcnt,bme680.temperature(),bme680.pressureNN(),bme680.humidity(),bme680.iaq_percent(), bme680.iaq_state(), device().battery().low(), device().battery().current());
       device().sendPeerEvent(msg, *this);
     }
 
