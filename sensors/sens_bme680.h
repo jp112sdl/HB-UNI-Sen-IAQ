@@ -1,4 +1,5 @@
-//based on https://github.com/G6EJD/BME680-Example
+// based on https://github.com/G6EJD/BME680-Example
+// https://github.com/pimoroni/bme680-python/blob/master/examples/indoor-air-quality.py
 
 #ifndef _SENS_BME680_H_
 #define _SENS_BME680_H_
@@ -16,10 +17,10 @@
  */
 
 #define HUM_REFERENCE   40.0
-#define HUM_WEIGHTING   0.25     // so hum effect is 25% of the total air quality score
-#define GAS_WEIGHTING   0.75     // so gas effect is 75% of the total air quality score
-#define GAS_LOWER_LIMIT 50000.0   // Bad air quality limit
-#define GAS_UPPER_LIMIT 500000.0  // Good air quality limit
+#define HUM_WEIGHTING   0.25      // so hum effect is 25% of the total air quality score
+#define GAS_WEIGHTING   0.75      // so gas effect is 75% of the total air quality score
+#define GAS_LOWER_LIMIT 5000.0    // Bad air quality limit
+#define GAS_UPPER_LIMIT 200000.0  // Good air quality limit
 #define AVG_COUNT       1
 
 namespace as {
@@ -55,7 +56,7 @@ public:
     DHEXLN(_bme680.getChipID());
 
       // oversampling: humidity = x1, temperature = x2, pressure = x16
-    _bme680.setOversampling(BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X4);
+    _bme680.setOversampling(BME680_OVERSAMPLING_X4, BME680_OVERSAMPLING_X4, BME680_OVERSAMPLING_X8);
     _bme680.setIIRFilter(BME680_FILTER_3);
     _bme680.setGasOn(320, 150); // 300 degree Celsius and 100 milliseconds
     _bme680.setForcedMode();
@@ -107,7 +108,9 @@ public:
           _delay_ms(200);
           status = _bme680.readStatus();
         }
-        gas  += _bme680.readGasResistance();
+        uint32_t _g = _bme680.readGasResistance();
+        //DDEC(_g);
+        gas  += _g;
         status = _bme680.readStatus();
       }
       gas /= AVG_COUNT;
@@ -120,7 +123,7 @@ public:
       DPRINT(F("P   = "));DDECLN(pres);
       DPRINT(F("PNN = "));DDECLN(_pressureNN);
       DPRINT(F("Hum = "));DDECLN(_humidity);
-      DPRINT(F("Gas = "));DDECLN(gas / 1000);
+      DPRINT(F("Gas = "));DDECLN(gas);
 
       /*
        This software, the ideas and concepts is Copyright (c) David Bird 2018. All rights to this software are reserved.
