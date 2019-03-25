@@ -19,8 +19,8 @@
 #define HUM_REFERENCE   40.0
 #define HUM_WEIGHTING   0.25      // so hum effect is 25% of the total air quality score
 #define GAS_WEIGHTING   0.75      // so gas effect is 75% of the total air quality score
-#define GAS_LOWER_LIMIT 5000.0    // Bad air quality limit
-#define GAS_UPPER_LIMIT 200000.0  // Good air quality limit
+#define GAS_LOWER_LIMIT 20000.0    // Bad air quality limit
+#define GAS_UPPER_LIMIT 300000.0  // Good air quality limit
 #define AVG_COUNT       1
 
 namespace as {
