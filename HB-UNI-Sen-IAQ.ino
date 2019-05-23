@@ -96,7 +96,7 @@ class WeatherEventMsg : public Message {
       if ( batlow == true ) {
         t1 |= 0x80; // set bat low bit
       }
-      Message::init(0x11, msgcnt, 0x70,  (msgcnt % 20 == 1) ? BIDI : BCAST, t1, t2);
+      Message::init(0x11, msgcnt, 0x70,  (msgcnt % 20 == 1) ? (BIDI | WKMEUP) : BCAST, t1, t2);
       pload[0] = (airPressure >> 8) & 0xff;
       pload[1] = airPressure & 0xff;
       pload[2] = humidity & 0xff;
