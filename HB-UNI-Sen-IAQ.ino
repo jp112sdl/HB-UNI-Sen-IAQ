@@ -96,7 +96,7 @@ class WeatherEventMsg : public Message {
       if ( batlow == true ) {
         t1 |= 0x80; // set bat low bit
       }
-      Message::init(0x11, msgcnt, 0x70,  (msgcnt % 20 == 1) ? (BIDI | WKMEUP) : BCAST, t1, t2);
+      Message::init(0x11, msgcnt, 0x70, BIDI | WKMEUP, t1, t2);
       pload[0] = (airPressure >> 8) & 0xff;
       pload[1] = airPressure & 0xff;
       pload[2] = humidity & 0xff;
@@ -122,7 +122,7 @@ class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CH
       clock.add(*this);
       bme680.measure(this->device().getList0().height());
       msg.init( msgcnt,bme680.temperature(),bme680.pressureNN(),bme680.humidity(),bme680.iaq_percent(), bme680.iaq_state(), device().battery().low(), device().battery().current());
-      device().sendPeerEvent(msg, *this);
+      if (msgcnt % 20 == 1) device().sendPeerEvent(msg, *this); else device().broadcastEvent(msg, *this);
     }
 
     uint32_t delay () {
