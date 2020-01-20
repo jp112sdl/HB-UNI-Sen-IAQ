@@ -3,7 +3,7 @@
 // 2016-10-31 papa Creative Commons - http://creativecommons.org/licenses/by-nc-sa/3.0/de/
 // 2019-02-28 jp112sdl (Creative Commons)
 //- -----------------------------------------------------------------------------------------------------------------------
-// #define NDEBUG   // disable all serial debug messages
+//#define NDEBUG   // disable all serial debug messages
 // #define USE_CC1101_ALT_FREQ_86835  //use alternative frequency to compensate not correct working cc1101 modules
 #define SENSOR_ONLY
 
@@ -19,14 +19,26 @@
 #define LED_PIN 4
 #define CONFIG_BUTTON_PIN 8
 #define PEERS_PER_CHANNEL 6
+#define SAMPLINGINTERVALL_IN_SECONDS 240
+
+//-----------------------------------------------------------------------------------------
+
+//Korrektur von Temperatur und Luftfeuchte
+//Einstellbarer OFFSET für Temperatur -> gemessene Temp +/- Offset = Angezeigte Temp.
+#define OFFSETtemp 0 //z.B -50 ≙ -5°C / 50 ≙ +5°C
+
+//Einstellbarer OFFSET für Luftfeuchte -> gemessene Luftf. +/- Offset = Angezeigte Luftf.
+#define OFFSEThumi 0 //z.B -10 ≙ -10%RF / 10 ≙ +10%RF
+
+//-----------------------------------------------------------------------------------------
 
 // all library classes are placed in the namespace 'as'
 using namespace as;
 
 // define all device properties
 const struct DeviceInfo PROGMEM devinfo = {
-  {0xf1, 0xd1, 0x00},     // Device ID
-  "JPIAQ00000",           // Device Serial
+  {0xf1, 0xd1, 0x01},     // Device ID
+  "JPIAQFUEL1",           // Device Serial
   {0xf1, 0xd1},           // Device Model Indoor
   0x10,                   // Firmware Version
   as::DeviceType::THSensor, // Device Type
@@ -121,12 +133,15 @@ class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CH
       tick = delay();
       clock.add(*this);
       bme680.measure(this->device().getList0().height());
-      msg.init( msgcnt,bme680.temperature(),bme680.pressureNN(),bme680.humidity(),bme680.iaq_percent(), bme680.iaq_state(), device().battery().low(), device().battery().current());
-      if (msgcnt % 20 == 1) device().sendPeerEvent(msg, *this); else device().broadcastEvent(msg, *this);
+      
+      DPRINT("corrected T/H = ");DDEC(bme680.temperature()+OFFSETtemp);DPRINT("/");DDECLN(bme680.humidity()+OFFSEThumi);
+      
+      msg.init( msgcnt,bme680.temperature()+OFFSETtemp,bme680.pressureNN(),bme680.humidity()+OFFSEThumi,bme680.iaq_percent(), bme680.iaq_state(), device().battery().low(), device().battery().current());
+      if (msgcnt % 80 == 1) device().sendPeerEvent(msg, *this); else device().broadcastEvent(msg, *this);
     }
 
     uint32_t delay () {
-      return seconds2ticks(max(this->device().getList0().updIntervall(),10));
+      return seconds2ticks(max(this->device().getList0().updIntervall(),SAMPLINGINTERVALL_IN_SECONDS));
     }
     void setup(Device<Hal, SensorList0>* dev, uint8_t number, uint16_t addr) {
       Channel::setup(dev, number, addr);
@@ -174,5 +189,3 @@ void loop() {
     hal.activity.savePower<Sleep<>>(hal);
   }
 }
-
-
