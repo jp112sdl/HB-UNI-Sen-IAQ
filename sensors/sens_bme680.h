@@ -11,7 +11,7 @@
 
 /*
  * Gas is returned as a resistance value in ohms.
- * This value takes up to 30 minutes to stabilize!
+ * After switch on, it takes up to 30 minutes of measurements in the desired mode to get stable measurement results.
  * Once it stabilizes, you can use that as your baseline reading.
  * Higher concentrations of VOC will make the resistance lower.
  */
@@ -20,12 +20,12 @@
 #define HUM_WEIGHTING   0.00      // so hum effect is 0% of the total air quality score, default is 25%
 #define GAS_WEIGHTING   (1.00-(HUM_WEIGHTING))      // so gas effect is 100% of the total air quality score, default is 75%; sum of HUM_WEIGHTING and GAS_WEIGHTING is 1.0
 #define HUM_DELTA       5.0       // band around HUM_REFERENCE for best humidity, i.e. 35% .. 45% relative humidity as default
-#define GAS_LOWER_LIMIT 2000.0    // Bad air quality limit 2kOhm
-#define GAS_UPPER_LIMIT 170000.0  // Good air quality limit 170kOhm
-#define AVG_COUNT       1
+#define GAS_LOWER_LIMIT 4000.0   // Initial setting for bad  air quality lower limit; will automatically adjusted when sensor exposed to a strong smell e.g. parmesan or gouda cheese, mustard, clementine or orange peel, disinfectant solution, etc. 
+#define GAS_UPPER_LIMIT 16000.0  // Initial setting for good air quality upper limit; will automatically adjusted when sensor is put to outdoor for few hours                
+#define AVG_COUNT       5
 #define IIR_FILTER_COEFFICIENT 0.9998641  // Decay to 0.71 in about one week for a 4 min sampling period (in 2520 sampling periods)
-#define GAS_FACTOR      0.25      // for calclulating the _gas_score the upper gas limit is scaled by this factor in order to get more meaningful results for indoor sensors
-                                  // GAS_FACTOR should be set to 1.0 for an outdoor sensor
+#define GAS_FACTOR      1.0      // for calclulating the _gas_score the upper gas limit is scaled by this factor in order to get more meaningful results for indoor sensors
+                                 // GAS_FACTOR should be set to 1.0 for an outdoor sensor
 
 namespace as {
 
@@ -66,7 +66,7 @@ public:
       // oversampling: humidity = x1, temperature = x2, pressure = x16
     _bme680.setOversampling(BME680_OVERSAMPLING_X4, BME680_OVERSAMPLING_X4, BME680_OVERSAMPLING_X8);
     _bme680.setIIRFilter(BME680_FILTER_3);
-    _bme680.setGasOn(320, 150); // 300 degree Celsius and 100 milliseconds
+    _bme680.setGasOn(300, 300); // 300 degree Celsius and 500 milliseconds; please check in debug mode whether '-> Gas heat_stab_r   = 1' is achieved. If '-> Gas heat_stab_r   = 0' then the heating time is to short or the temp target too high
     _bme680.setForcedMode();
     
     _max_gas_resistance = 0;
@@ -112,23 +112,32 @@ public:
       temp = _bme680.readTemperature();
       pres = _bme680.readPressure();
       hum =  _bme680.readHumidity();
+      
 
-      DPRINT("gas: ");
+     
       gas = 0;
       for (uint8_t c = 0; c < AVG_COUNT; c++) {
         while (! (status.newDataFlag == 1)) {
           _bme680.setForcedMode();
           DPRINT(".");
-          _delay_ms(200);
+          _delay_ms(100);
           status = _bme680.readStatus();
         }
+        // need to check whether first reading belongs to previous quintuple reading (last reading). Measurement results are indicating this. 
+        ClosedCube_BME680_gas_r_lsb gas_status = _bme680.read_gas_r_lsb();
+        DPRINT(F("Gas heat_stab_r   = "));DDECLN(gas_status.heat_stab_r);
+        DPRINT(F("Gas gas_valid_r   = "));DDECLN(gas_status.gas_valid_r);
         uint32_t _g = _bme680.readGasResistance();
+        DPRINT("gas: ");DDECLN(_g);
         //DDEC(_g);
         gas  += _g;
         status = _bme680.readStatus();
       }
+      
       gas /= AVG_COUNT;
-      DDECLN(gas);
+      DPRINT("avg gas: ");DDECLN(gas);
+      
+      
       
       if ( gas > _max_gas_resistance)    // capture maximum of measured gas resistances
         _max_gas_resistance = gas;
