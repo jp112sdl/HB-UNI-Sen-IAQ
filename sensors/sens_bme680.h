@@ -11,21 +11,25 @@
 
 /*
  * Gas is returned as a resistance value in ohms.
- * This value takes up to 30 minutes to stabilize!
+ * After switch on, it takes up to 30 minutes of measurements in the desired mode to get stable measurement results.
  * Once it stabilizes, you can use that as your baseline reading.
  * Higher concentrations of VOC will make the resistance lower.
  */
 
 #define HUM_REFERENCE   40.0
-#define HUM_WEIGHTING   0.25      // so hum effect is 25% of the total air quality score
-#define GAS_WEIGHTING   0.75      // so gas effect is 75% of the total air quality score
-#define GAS_LOWER_LIMIT 20000.0    // Bad air quality limit
-#define GAS_UPPER_LIMIT 300000.0  // Good air quality limit
-#define AVG_COUNT       1
+#define HUM_WEIGHTING   0.00      // so hum effect is 0% of the total air quality score, default is 25%
+#define GAS_WEIGHTING   (1.00-(HUM_WEIGHTING))      // so gas effect is 100% of the total air quality score, default is 75%; sum of HUM_WEIGHTING and GAS_WEIGHTING is 1.0
+#define HUM_DELTA       5.0       // band around HUM_REFERENCE for best humidity, i.e. 35% .. 45% relative humidity as default
+#define GAS_LOWER_LIMIT 2000.0    // Initial setting for bad  air quality lower limit; will automatically adjusted when sensor exposed to a bad smell e.g. parmesan cheese, mustard, clementine or orange peel, disinfectant solution, etc. 
+#define GAS_UPPER_LIMIT 150000.0  // Initial setting for good air quality upper limit; will automatically adjusted when sensor is put to outdoor for few hours                
+#define AVG_COUNT       5
+#define IIR_FILTER_COEFFICIENT 0.9998641  // Decay to 0.71 in about one week for a 4 min sampling period (in 2520 sampling periods)
+#define GAS_FACTOR      1.0      // for calclulating the _gas_score the upper gas limit is scaled by this factor in order to get more meaningful results for indoor sensors
+                                 // GAS_FACTOR should be set to 1.0 for an outdoor sensor
 
 namespace as {
 
-template <uint8_t ADDRESS=0x77>
+template <uint8_t ADDRESS=0x76>  // I2C address needs to be be set according to your BME680 sensor breakout in the main sketch HB-UNI-Sen-IAQ.ino: 'Sens_Bme680<0x76>   bme680;' not here!
 class Sens_Bme680 : public Sensor {
 private:
   int16_t   _temperature;
@@ -33,6 +37,10 @@ private:
   uint8_t   _humidity;
   uint16_t  _iaqPercent;
   uint8_t   _iaqState;
+  uint32_t  _max_gas_resistance;  // maximum measured gas resistance
+  uint32_t  _min_gas_resistance;  // minimum measured gas resistance
+  uint32_t  _gas_lower_limit;     // adaptive lower resistance level for bad air quality
+  uint32_t  _gas_upper_limit;     // adaptive upper resistance level for good air quality
 
   ClosedCube_BME680 _bme680;
 public:
@@ -55,17 +63,23 @@ public:
     DPRINT(", Chip ID=0x");
     DHEXLN(_bme680.getChipID());
 
-      // oversampling: humidity = x1, temperature = x2, pressure = x16
-    _bme680.setOversampling(BME680_OVERSAMPLING_X4, BME680_OVERSAMPLING_X4, BME680_OVERSAMPLING_X8);
-    _bme680.setIIRFilter(BME680_FILTER_3);
-    _bme680.setGasOn(320, 150); // 300 degree Celsius and 100 milliseconds
+      // oversampling: humidity = x2, temperature = x8, pressure = x4
+    _bme680.setOversampling(BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X8, BME680_OVERSAMPLING_X4);
+    _bme680.setIIRFilter(BME680_FILTER_3); // supresses spikes 
+    _bme680.setGasOn(310, 300); // 310 degree Celsius and 300 milliseconds; please check in debug mode whether '-> Gas heat_stab_r   = 1' is achieved. If '-> Gas heat_stab_r   = 0' then the heating time is to short or the temp target too high
     _bme680.setForcedMode();
+    
+    _max_gas_resistance = 0;
+    _min_gas_resistance = 1000000;
+    _gas_upper_limit = GAS_UPPER_LIMIT;
+    _gas_lower_limit = GAS_LOWER_LIMIT;
+    
   }
 
-  float EquivalentSeaLevelPressure(float altitude, float temp, float pres) {
-      float seaPress = NAN;
+  double EquivalentSeaLevelPressure(float altitude, float temp, double pres) {
+      double seaPress = NAN;
       if(!isnan(altitude) && !isnan(temp) && !isnan(pres))
-          seaPress = (pres / pow(1 - ((0.0065 *altitude) / (temp + (0.0065 *altitude) + 273.15)), 5.257));
+          seaPress = (pres / pow(1 - ((0.0065 *(double)altitude) / ((double)temp + (0.0065 *(double)altitude) + 273.15)), 5.257));
       return seaPress;
   }
 
@@ -84,7 +98,7 @@ public:
 
   void measure (uint16_t height) {
     if (_present == true) {
-      float temp(NAN), hum(NAN), pres(NAN);
+      double temp(NAN), hum(NAN), pres(NAN); // use type double in order to match the return type of closed cubes's library function readPressure
       uint32_t gas = 0;
 
       ClosedCube_BME680_Status status = _bme680.readStatus();
@@ -98,32 +112,79 @@ public:
       temp = _bme680.readTemperature();
       pres = _bme680.readPressure();
       hum =  _bme680.readHumidity();
-
-      DPRINT("gas: ");
+      
+      //initial trigger of measurement at the beginning of the averaging loop
+      _bme680.setForcedMode();
+      _delay_ms(200);
+      status = _bme680.readStatus();
+     
       gas = 0;
       for (uint8_t c = 0; c < AVG_COUNT; c++) {
         while (! (status.newDataFlag == 1)) {
           _bme680.setForcedMode();
           DPRINT(".");
-          _delay_ms(200);
+          _delay_ms(100);
           status = _bme680.readStatus();
         }
+        // need to check whether first reading belongs to previous quintuple reading (last reading). Measurement results are indicating this. 
+        ClosedCube_BME680_gas_r_lsb gas_status = _bme680.read_gas_r_lsb();
+        DPRINT(F("Gas heat_stab_r   = "));DDECLN(gas_status.heat_stab_r);
+        DPRINT(F("Gas gas_valid_r   = "));DDECLN(gas_status.gas_valid_r);
         uint32_t _g = _bme680.readGasResistance();
+        DPRINT("index: ");DDECLN(c);
+        DPRINT("gas: ");DDECLN(_g);
         //DDEC(_g);
         gas  += _g;
         status = _bme680.readStatus();
       }
+      
       gas /= AVG_COUNT;
-      DDECLN(gas);
+      DPRINT("avg gas: ");DDECLN(gas);
+      
+      
+      
+      if ( gas > _max_gas_resistance)    // capture maximum of measured gas resistances
+        _max_gas_resistance = gas;
+      if ( gas < _min_gas_resistance)    // capture minimum of measured gas resistances
+        _min_gas_resistance = gas;
+      
+      //peak detector for _gas_upper_limit 
+      if ( gas > _gas_upper_limit )
+      {
+        _gas_upper_limit = gas;
+      }
+      else
+      {
+        _gas_upper_limit = _gas_upper_limit * IIR_FILTER_COEFFICIENT; // decay each sample by IIR_FILTER_COEFFICIENT
+        if ( _gas_upper_limit < GAS_UPPER_LIMIT )
+          _gas_upper_limit = GAS_UPPER_LIMIT; // lower limit for _gas_upper_limit
+      }
+      
+      //peak detector for _gas_lower_limit 
+      if ( gas < _gas_lower_limit )
+      {
+        _gas_lower_limit = gas;
+      }
+      else
+      {
+        _gas_lower_limit = _gas_lower_limit / IIR_FILTER_COEFFICIENT; // increase each sample by 1.0/IIR_FILTER_COEFFICIENT
+        if ( _gas_lower_limit > GAS_LOWER_LIMIT )
+          _gas_lower_limit = GAS_LOWER_LIMIT; // upper limit for _gas_lower_limit
+      }
+      
       _temperature = (int16_t)(temp * 10);
-      _pressureNN  = (uint16_t)(EquivalentSeaLevelPressure(float(height), temp, pres) * 10);
+      _pressureNN  = (uint16_t)(EquivalentSeaLevelPressure(float(height), temp, pres)*10.0); 
       _humidity    = (uint8_t)hum;
+      
+      DPRINT(F("Gas UPPER LIMIT   = "));DDECLN(_gas_upper_limit);
+      DPRINT(F("Gas LOWER LIMIT   = "));DDECLN(_gas_lower_limit);
 
       DPRINT(F("T   = "));DDECLN(_temperature);
       DPRINT(F("P   = "));DDECLN(pres);
       DPRINT(F("PNN = "));DDECLN(_pressureNN);
       DPRINT(F("Hum = "));DDECLN(_humidity);
       DPRINT(F("Gas = "));DDECLN(gas);
+      DPRINT(F("Gas FACTOR = "));DDECLN(GAS_FACTOR);
 
       /*
        This software, the ideas and concepts is Copyright (c) David Bird 2018. All rights to this software are reserved.
@@ -146,33 +207,44 @@ public:
         //Calculate humidity contribution to IAQ index
       float _hum_score = 0.0;
       float _gas_score = 0.0;
-        if (hum >= 38 && hum <= 42)
-          _hum_score = 0.25*100; // Humidity +/-5% around optimum
-        else
-        { //sub-optimal
-          if (hum < 38)
-            _hum_score = 0.25/HUM_REFERENCE*hum*100;
+      if (hum >= HUM_REFERENCE - HUM_DELTA && hum <= HUM_REFERENCE + HUM_DELTA)
+        _hum_score = HUM_WEIGHTING*100.0; // Humidity +/-HUM_DELTA% around optimum HUM_REFERENCE; region 0
+      else
+      { //sub-optimal, trapezoid function: 0 @ hum=0; HUM_WEIGHTING @ hum = HUM_REFERENCE - HUM_DELTA; HUM_WEIGHTING @ hum = HUM_REFERENCE + HUM_DELTA; 0 for hum >= HUM_REFERENCE + HUM_DELTA;
+        if (hum < HUM_REFERENCE - HUM_DELTA)
+          _hum_score = HUM_WEIGHTING/(HUM_REFERENCE - HUM_DELTA)*hum*100.0; // region 1; zero for hum = 0, continuous at hum = HUM_REFERENCE - HUM_DELTA
+        else // (hum > HUM_REFERENCE + HUM_DELTA)
+        {
+          if ( hum >= 2 * HUM_REFERENCE )
+            _hum_score = 0.0;
           else
           {
-            _hum_score = ((-0.25/(100-HUM_REFERENCE)*hum)+0.416666)*100;
+            _hum_score = (-HUM_WEIGHTING/(HUM_REFERENCE - HUM_DELTA)*(hum-2*HUM_REFERENCE))*100.0; // region 2; negative slope of region 1; zero for hum = 2 * HUM_REFERENCE, continuous at hum = HUM_REFERENCE + HUM_DELTA
           }
         }
+      }
+      
+      // limit gas values
+      if (gas > _gas_upper_limit) gas = _gas_upper_limit;
+      if (gas < _gas_lower_limit) gas = _gas_lower_limit;
+        
+      //DPRINT(F("gRef= "));DDECLN(_gas_reference);
 
-        if (gas > GAS_UPPER_LIMIT) gas = GAS_UPPER_LIMIT;
-        if (gas < GAS_LOWER_LIMIT) gas = GAS_LOWER_LIMIT;
-        //DPRINT(F("gRef= "));DDECLN(_gas_reference);
+      _gas_score = ( GAS_WEIGHTING/(_gas_upper_limit*GAS_FACTOR-_gas_lower_limit)*gas - GAS_WEIGHTING*_gas_lower_limit/(_gas_upper_limit*GAS_FACTOR-_gas_lower_limit))*100.0;
+      
+      if ( _gas_score > 100.0 )
+        _gas_score = 100.0;
 
-        _gas_score = (0.75/(GAS_UPPER_LIMIT-GAS_LOWER_LIMIT)*gas -(GAS_LOWER_LIMIT*(0.75/(GAS_UPPER_LIMIT-GAS_LOWER_LIMIT))))*100;
+        
+      //Combine results for the final IAQ index value (0-100% where 100% is good quality air)
+      float air_quality_score = _hum_score + _gas_score;
 
-        //Combine results for the final IAQ index value (0-100% where 100% is good quality air)
-        float air_quality_score = _hum_score + _gas_score;
-
-        _iaqState = CalculateIAQ(air_quality_score);
-        _iaqPercent = (uint8_t)(air_quality_score);
-        //DPRINT(F("AQ% = "));DDECLN(_iaqPercent);
-        //DPRINT(F("AQS = "));DDECLN(_iaqState);
-        DPRINT(F("AQ  = "));DDEC((uint8_t)air_quality_score);DPRINT(F("% (H: "));DDEC((uint8_t)(_hum_score));DPRINT(F("% + G: "));DDEC((uint8_t)(_gas_score));DPRINTLN(F("%)"));
-        _bme680.setForcedMode();
+      _iaqState = CalculateIAQ(air_quality_score);
+      _iaqPercent = (uint8_t)(air_quality_score);
+      //DPRINT(F("AQ% = "));DDECLN(_iaqPercent);
+      //DPRINT(F("AQS = "));DDECLN(_iaqState);
+      DPRINT(F("AQ  = "));DDEC((uint8_t)air_quality_score);DPRINT(F("% (H: "));DDEC((uint8_t)(_hum_score));DPRINT(F("% + G: "));DDEC((uint8_t)(_gas_score));DPRINTLN(F("%)"));
+      _bme680.setForcedMode();
     }
   }
   
