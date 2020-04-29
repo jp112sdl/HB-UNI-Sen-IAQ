@@ -25,10 +25,10 @@
 
 //Korrektur von Temperatur und Luftfeuchte
 //Einstellbarer OFFSET für Temperatur -> gemessene Temp +/- Offset = Angezeigte Temp.
-#define OFFSETtemp 0 //z.B -50 ≙ -5°C / 50 ≙ +5°C
+#define OFFSETtemp -16 //z.B -50 ≙ -5°C / 50 ≙ +5°C, Offset bitte an Deinen Sensor anpassen
 
 //Einstellbarer OFFSET für Luftfeuchte -> gemessene Luftf. +/- Offset = Angezeigte Luftf.
-#define OFFSEThumi 0 //z.B -10 ≙ -10%RF / 10 ≙ +10%RF
+#define OFFSEThumi +3   //z.B -10 ≙ -10%RF / 10 ≙ +10%RF, Offset bitte an Deinen Sensor anpassen
 
 //-----------------------------------------------------------------------------------------
 
@@ -38,7 +38,7 @@ using namespace as;
 // define all device properties
 const struct DeviceInfo PROGMEM devinfo = {
   {0xf1, 0xd1, 0x01},     // Device ID
-  "JPIAQ00001",           // Device Serial
+  "JPIAQFUEL1",           // Device Serial
   {0xf1, 0xd1},           // Device Model Indoor
   0x10,                   // Firmware Version
   as::DeviceType::THSensor, // Device Type
@@ -120,7 +120,7 @@ class WeatherEventMsg : public Message {
 
 class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CHANNEL, SensorList0>, public Alarm {
     WeatherEventMsg msg;
-    Sens_Bme680<>   bme680;
+    Sens_Bme680<0x76>   bme680; // please insrt your sensor's I2C address between the brackets, here 0x76
     uint16_t        millis;
 
   public:
