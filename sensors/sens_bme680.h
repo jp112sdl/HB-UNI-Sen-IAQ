@@ -22,6 +22,7 @@
 #define HUM_DELTA       5.0       // band around HUM_REFERENCE for best humidity, i.e. 35% .. 45% relative humidity as default
 #define GAS_LOWER_LIMIT 2000.0    // Initial setting for bad  air quality lower limit; will automatically adjusted when sensor exposed to a bad smell e.g. parmesan cheese, mustard, clementine or orange peel, disinfectant solution, etc. 
 #define GAS_UPPER_LIMIT 150000.0  // Initial setting for good air quality upper limit; will automatically adjusted when sensor is put to outdoor for few hours                
+
 #define AVG_COUNT       5
 #define IIR_FILTER_COEFFICIENT 0.9998641  // Decay to 0.71 in about one week for a 4 min sampling period (in 2520 sampling periods)
 #define GAS_FACTOR      1.0      // for calclulating the _gas_score the upper gas limit is scaled by this factor in order to get more meaningful results for indoor sensors
@@ -30,6 +31,7 @@
 namespace as {
 
 template <uint8_t ADDRESS=0x76>  // I2C address needs to be be set according to your BME680 sensor breakout in the main sketch HB-UNI-Sen-IAQ.ino: 'Sens_Bme680<0x76>   bme680;' not here!
+
 class Sens_Bme680 : public Sensor {
 private:
   int16_t   _temperature;
@@ -67,6 +69,7 @@ public:
     _bme680.setOversampling(BME680_OVERSAMPLING_X2, BME680_OVERSAMPLING_X8, BME680_OVERSAMPLING_X4);
     _bme680.setIIRFilter(BME680_FILTER_3); // supresses spikes 
     _bme680.setGasOn(310, 300); // 310 degree Celsius and 300 milliseconds; please check in debug mode whether '-> Gas heat_stab_r   = 1' is achieved. If '-> Gas heat_stab_r   = 0' then the heating time is to short or the temp target too high
+
     _bme680.setForcedMode();
     
     _max_gas_resistance = 0;
@@ -132,6 +135,7 @@ public:
         DPRINT(F("Gas gas_valid_r   = "));DDECLN(gas_status.gas_valid_r);
         uint32_t _g = _bme680.readGasResistance();
         DPRINT("index: ");DDECLN(c);
+
         DPRINT("gas: ");DDECLN(_g);
         //DDEC(_g);
         gas  += _g;
